@@ -28,6 +28,8 @@
 #define NR_SAMPLES      (5)
 #define SAMPLE_US       (250000)
 
+static double samples[NR_SAMPLES] = {};
+
 static size_t nr_relax = 10;
 static size_t nr_tested_cores = ~0;
 
@@ -238,30 +240,22 @@ thread_fn_error:
     exit(1);
   }
 
-  printf("avg latency to communicate a modified line from one core to another\n");
-  printf("times are in ns\n\n");
-
-  // print top row header
-  const int col_width = 8;
   size_t first_cpu = ~0;
   size_t last_cpu = 0;
-  printf("   ");
   for (size_t j = 0; j < CPU_SETSIZE; ++j) {
     if (CPU_ISSET(j, &cpus)) {
       if (first_cpu > j) {
         first_cpu = j;
-      }
-      else {
-        printf("%*zu", col_width, j);
       }
       if (last_cpu < j) {
         last_cpu = j;
       }
     }
   }
-  printf("\n");
 
-  for (size_t i = 0, core = 0; i < last_cpu && core < nr_tested_cores; ++i) {
+  printf("%5s%5s%10s%10s%10s\n", "a", "b", "min", "avg", "max");
+
+  for (size_t i = 0, core = 0; i <= last_cpu && core < nr_tested_cores; ++i) {
     if (!CPU_ISSET(i, &cpus)) {
       continue;
     }
@@ -271,13 +265,11 @@ thread_fn_error:
     CPU_SET(i, &even.cpus);
     even.me = 0;
     even.buddy = 1;
-    printf("%2zu:", i);
-    for (size_t j = first_cpu+1; j <= i; ++j) {
-      if (CPU_ISSET(j, &cpus)) {
-        printf("%*s", col_width, "");
+    for (size_t j = 0; j <= last_cpu; ++j) {
+      if (i == j) {
+        printf("%5d%5d%10.0f%10.0f%10.0f\n", (int)i, (int)j, 0.0, 0.0, 0.0);
+	continue;
       }
-    }
-    for (size_t j = i+1; j <= last_cpu; ++j) {
       if (!CPU_ISSET(j, &cpus)) {
         continue;
       }
@@ -300,18 +292,29 @@ thread_fn_error:
       }
 
       uint64_t last_stamp = now_nsec();
-      double best_sample = 1./0.;   // infinity
       for (size_t sample_no = 0; sample_no < NR_SAMPLES; ++sample_no) {
         usleep(SAMPLE_US);
         atomic_t s = __sync_lock_test_and_set(&nr_pingpongs.x, 0);
         uint64_t time_stamp = now_nsec();
         double sample = (time_stamp - last_stamp) / (double)s;
         last_stamp = time_stamp;
-        if (sample < best_sample) {
-          best_sample = sample;
-        }
+	samples[sample_no] = sample;
       }
-      printf("%*.1f", col_width, best_sample);
+
+      double min_sample = 1.0 / 0.0;
+      double max_sample = 0.0;
+      double avg_sample = 0.0;
+      double total_sample = 0.0;
+
+      for (size_t sample_no = 0; sample_no < NR_SAMPLES; ++sample_no) {
+	min_sample = samples[sample_no] < min_sample ? samples[sample_no] : min_sample;
+	max_sample = samples[sample_no] > max_sample ? samples[sample_no] : max_sample;
+	total_sample += samples[sample_no];
+      }
+
+      avg_sample = total_sample / NR_SAMPLES;
+
+      printf("%5d%5d%10.0f%10.0f%10.0f\n", (int)i, (int)j, min_sample, avg_sample, max_sample);
 
       stop_loops = 1;
       if (pthread_join(odd_thread, NULL)) {
@@ -330,9 +333,7 @@ thread_fn_error:
       }
       pingpong_mutex = NULL;
     }
-    printf("\n");
   }
-  printf("\n");
 
   return 0;
 }
